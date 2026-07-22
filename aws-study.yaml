@@ -6,6 +6,10 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     Description: EC2に設定するキーペアを選択
 
+  MyIP:
+    Type: String
+    Description: 管理者のグローバルIP（/32）
+
   DBUser:
     Type: String
     Default: admin
@@ -99,7 +103,7 @@ Resources:
     Properties:
       GatewayId: !Ref IGW
       RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0　
+      DestinationCidrBlock: 0.0.0.0/0
 
   RouteLocal: # パブリックサブネット化（IGWへの経路を持つRTを紐付け）
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -145,7 +149,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0 # 学習用。本番では管理者IP(/32)に絞ること
+          CidrIp: !Ref MyIP
       SecurityGroupEgress:
         - IpProtocol:  -1
           CidrIp: 0.0.0.0/0    
@@ -276,7 +280,7 @@ Resources:
       PreferredMaintenanceWindow: sun:18:00-sun:19:00
       DBName: awsstudy
       Engine: mysql
-      EngineVersion: "8.4.9"
+      # EngineVersion の行を削除 → MySQLのデフォルト版を使う
       LicenseModel: general-public-license
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
