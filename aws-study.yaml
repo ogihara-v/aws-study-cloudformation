@@ -1,0 +1,303 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS-Study Template"
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2に設定するキーペアを選択
+
+  DBUser:
+    Type: String
+    Default: admin
+    Description: Master username
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Master password
+
+Resources:
+#---------------------ネットワーク基盤------------------------
+  VPC:  #CIDRブロック"10.0.0.0/16"でVPCを作成
+    Type: AWS::EC2::VPC
+    Properties:
+     CidrBlock: 10.0.0.0/16
+     EnableDnsSupport: true
+     EnableDnsHostnames: true
+     Tags:
+      - Key: Name
+        Value: aws-study-vpc
+
+  IGW: # IGWを作成
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: aws-study-gw
+
+  GatewayAttachment: # 作成したIGWをVPCにアタッチ
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  PublicSubnetAZ1a:  # パブリックIP割り当て：有効
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-northeast-1a
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags: 
+       - Key: Name
+         Value: aws-study-public-subnet-1a
+
+  PublicSubnetAZ1c:  # パブリックIP割り当て：有効
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-northeast-1c
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags: 
+       - Key: Name
+         Value: aws-study-public-subnet-1c
+
+  PrivateSubnet1:  # RDS用、プライベートサブネット
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-northeast-1a
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      Tags: 
+       - Key: Name
+         Value: aws-study-private-subnet-1a
+
+  PrivateSubnet2:  # RDS_冗長化、プライベートサブネット
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: ap-northeast-1c
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags: 
+       - Key: Name
+         Value: aws-study-private-DBsubnet-1c       
+
+  PublicRouteTable: # ルートテーブル作成
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: aws-study-route
+
+  PublicRoute: # ルートテーブルに"宛先：0.0.0.0/0", 送信先:：IGW"を指定
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      GatewayId: !Ref IGW
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0　
+
+  RouteLocal: # パブリックサブネット化（IGWへの経路を持つRTを紐付け）
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ1a
+      RouteTableId: !Ref PublicRouteTable
+
+  RouteLocal2: # ALBを配置する「PublicSubnetAZ1c」もネット繋がるように関連付け
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ1c
+      RouteTableId: !Ref PublicRouteTable
+#---------------------ネットワーク基盤------------------------
+
+#---------------------セキュリティグループ------------------------
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP from internet to ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: aws-study-sg-alb
+
+  EC2SecurityGroup: # VPCに"SSH(22), ALBからの8080"を許可、アウトバウンドは拒否しない
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH/HTTP/8080
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # 学習用。本番では管理者IP(/32)に絞ること
+      SecurityGroupEgress:
+        - IpProtocol:  -1
+          CidrIp: 0.0.0.0/0    
+      Tags:
+        - Key: Name
+          Value: aws-study-sg-ec2
+
+  RDSSecurityGroup: # MySQL3306をEC2から許可
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow MySQL from EC2
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol:  -1
+          CidrIp: 0.0.0.0/0   
+      Tags:
+        - Key: Name
+          Value: aws-study-sg-rds
+#---------------------セキュリティグループ------------------------
+
+#---------------------アプリ層------------------------
+  EC2: # キーペアを指定して、作成したVPCとサブネット内にEC2インスタンスを起動, 作成したセキュリティグループをアタッチ
+    Type: AWS::EC2::Instance
+    Properties:
+      # Amazon Linux 2023 の最新AMIをSSMパラメータストアから取得
+      ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnetAZ1a
+      DisableApiTermination: false #false=終了保護OFF、true=終了保護ON
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: aws-study-ec2
+
+      # ストレージ設定(デフォルト値。明示してもよいが省略可能）)
+      #Monitoring: false 
+      #InstanceInitiatedShutdownBehavior: stop 
+      #BlockDeviceMappings:
+      #  - DeviceName: /dev/xvda
+      #    Ebs:
+      #      VolumeSize: 8
+      #      VolumeType: gp3
+#---------------------アプリ層------------------------
+
+#---------------------ロードバランサー層------------------------
+  ELB: 
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: aws-study-elb
+      Type: application # ALBと指定
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets: 
+        - !Ref PublicSubnetAZ1a
+        - !Ref PublicSubnetAZ1c
+      Tags: 
+        - Key: Name
+          Value: aws-study-elb
+
+  ELBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: aws-study-elb-tg
+      TargetType: instance
+      VpcId: !Ref VPC
+      Port: 8080 # アプリ(Spring Boot)の待受ポート
+      Protocol: HTTP
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: "/"
+      HealthCheckPort: "traffic-port"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 10
+      Matcher: 
+        HttpCode: 200
+      Tags: 
+        - Key: Name
+          Value: aws-study-elb-tg
+      Targets: 
+        - Id: !Ref EC2
+          Port: 8080
+
+    # デフォルト値（明示してもよいが省略可能）
+    #ProtocolVersion: HTTP1
+    #HealthCheckEnabled: true
+    #IpAddressType: ipv4
+    
+  ELBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ELB
+      DefaultActions: 
+        - TargetGroupArn: !Ref ELBTargetGroup
+          Type: forward
+      Port: 80
+      Protocol: HTTP
+#---------------------ロードバランサー層------------------------
+
+#---------------------データベース層------------------------
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  RDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      DBInstanceClass: db.t4g.micro
+      Port: 3306
+      StorageType: gp3
+      BackupRetentionPeriod: 1
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      PreferredBackupWindow: 12:00-13:00
+      PreferredMaintenanceWindow: sun:18:00-sun:19:00
+      DBName: awsstudy
+      Engine: mysql
+      EngineVersion: "8.4.9"
+      LicenseModel: general-public-license
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: aws-study-rds
+
+      # デフォルト値（明示してもよいが省略可能）
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      PubliclyAccessible: false
+      MultiAZ: false
+      DeletionProtection: false
+#---------------------データベース層------------------------
+
+Outputs:
+  RDSInstanceEndpoint:
+    Description: RDS endpoint
+    Value: !GetAtt RDS.Endpoint.Address
+
+  ELBDNSName:
+    Description: ALB DNS name
+    Value: !GetAtt ELB.DNSName
