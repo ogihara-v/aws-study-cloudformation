@@ -103,3 +103,9 @@ AWS CloudFormation / VPC / EC2 / ALB(ELBv2) / RDS(MySQL) / Security Group / IAM 
 ## 学習の位置づけ
 
 本テンプレートは、AWS設計・構築の学習（ハンズオン）の成果物です。IaCによるインフラ構築の理解を目的に、公式リファレンスを参照しながら各リソースを手書きで作成しました。
+
+---
+
+## 更新履歴
+
+- Pull Request作成用にREADMEを更新
