@@ -8,7 +8,9 @@ Parameters:
 
   MyIP:
     Type: String
-    Description: 管理者のグローバルIP（/32）
+    Description: SSH接続を許可する管理者のグローバルIP（例 203.0.113.5/32）
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/32$'
+    ConstraintDescription: x.x.x.x/32 の形式で入力してください
 
   DBUser:
     Type: String
@@ -378,6 +380,8 @@ Resources:
       ResourceArn: !Ref ELB
       WebACLArn: !GetAtt WebACL.Arn
 
+#---------------------WAF設定------------------------
+
 Outputs:
   RDSInstanceEndpoint:
     Description: RDS endpoint
@@ -386,4 +390,7 @@ Outputs:
   ELBDNSName:
     Description: ALB DNS name
     Value: !GetAtt ELB.DNSName
-#---------------------WAF設定------------------------
+
+  AlarmTopicArn:
+    Description: SNS topic ARN (購読確認・追加購読用)
+    Value: !Ref AlarmTopic
