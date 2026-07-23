@@ -6,6 +6,12 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     Description: EC2に設定するキーペアを選択
 
+  MyIP:
+    Type: String
+    Description: SSH接続を許可する管理者のグローバルIP（例 203.0.113.5/32）
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/32$'
+    ConstraintDescription: x.x.x.x/32 の形式で入力してください
+
   DBUser:
     Type: String
     Default: admin
@@ -15,6 +21,10 @@ Parameters:
     Type: String
     NoEcho: true
     Description: Master password
+
+  AlarmTopicAddress:
+    Type: String
+    Description: 通知先に設定したいアドレスを入力
 
 Resources:
 #---------------------ネットワーク基盤------------------------
@@ -99,7 +109,7 @@ Resources:
     Properties:
       GatewayId: !Ref IGW
       RouteTableId: !Ref PublicRouteTable
-      DestinationCidrBlock: 0.0.0.0/0　
+      DestinationCidrBlock: 0.0.0.0/0
 
   RouteLocal: # パブリックサブネット化（IGWへの経路を持つRTを紐付け）
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -145,7 +155,7 @@ Resources:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: 0.0.0.0/0 # 学習用。本番では管理者IP(/32)に絞ること
+          CidrIp: !Ref MyIP
       SecurityGroupEgress:
         - IpProtocol:  -1
           CidrIp: 0.0.0.0/0    
@@ -276,7 +286,7 @@ Resources:
       PreferredMaintenanceWindow: sun:18:00-sun:19:00
       DBName: awsstudy
       Engine: mysql
-      EngineVersion: "8.4.9"
+      # EngineVersion の行を削除 → MySQLのデフォルト版を使う
       LicenseModel: general-public-license
       DBSubnetGroupName: !Ref DBSubnetGroup
       VPCSecurityGroups:
@@ -293,6 +303,85 @@ Resources:
       DeletionProtection: false
 #---------------------データベース層------------------------
 
+#---------------------アラーム通知設定------------------------
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: aws-study-alarm-topic
+      Subscription: 
+        - Protocol: email
+          Endpoint: !Ref AlarmTopicAddress
+
+  CPUAlarm: # EC2が5分間(300秒)にしきい値5%を平均して1回超えた場合に通知
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: EC2-CPU-Alarm
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Statistic: Average            # 監視の定義：平均を見る
+      Period: 300                   # 1データポイントの集計期間(5分平均を1点とする)
+      EvaluationPeriods: 1          # 評価するデータポイント数(1点でもしきい値を超えたら発報)
+      Threshold: 5                  # しきい値
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref EC2
+      AlarmActions:
+        - !Ref AlarmTopic
+      TreatMissingData: breaching   # データ欠損時、異常扱い
+#---------------------アラーム通知設定------------------------
+
+#---------------------WAF設定------------------------
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: aws-study-acl
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}                    # 以下のルールに合致しない通信は許可(=適用ルールの攻撃パターン拒否)
+
+      VisibilityConfig:              # WAF全体の可視化設定（必須）
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: awsStudyACL
+
+      Rules:                         # 適用するルール
+        - Name: AWS-AWSManagedRulesCommonRuleSet
+          Priority: 1
+          OverrideAction:
+            None: {}                 # オーバーライドしない（Blockのまま）
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+
+          VisibilityConfig:          # ルールごとの可視化設定（必須）
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: commonRules
+
+  WAFLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: aws-waf-logs-study
+      RetentionInDays: 7 #ログの保持日数
+
+  WAFLogging:
+    Type: AWS::WAFv2::LoggingConfiguration
+    DependsOn: WAFLogGroup
+    Properties:
+      ResourceArn: !GetAtt WebACL.Arn 
+      LogDestinationConfigs:
+        - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:aws-waf-logs-study
+  
+  WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref ELB
+      WebACLArn: !GetAtt WebACL.Arn
+
+#---------------------WAF設定------------------------
+
 Outputs:
   RDSInstanceEndpoint:
     Description: RDS endpoint
@@ -301,3 +390,7 @@ Outputs:
   ELBDNSName:
     Description: ALB DNS name
     Value: !GetAtt ELB.DNSName
+
+  AlarmTopicArn:
+    Description: SNS topic ARN (購読確認・追加購読用)
+    Value: !Ref AlarmTopic
