@@ -168,3 +168,5 @@ SSM Parameter Store / CloudWatch / CloudWatch Logs / SNS / AWS WAF (WAFv2)
 
 - 監視（CloudWatch Alarm / SNS）と WAF（WebACL / ログ出力 / ALB関連付け）を追加
 - 講師フィードバックを反映（SSHのIP限定、RDS EngineVersionの指定解除）
+- RDSのDeletionPolicyを明示していなかったため、スタック削除時に自動スナップショットが作成され続け、想定外の保管料が発生。
+  DeletionPolicy: Delete を明示して再発防止
