@@ -274,6 +274,7 @@ Resources:
 
   RDS:
     Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
     Properties:
       AllocatedStorage: 20
       DBInstanceClass: db.t4g.micro
